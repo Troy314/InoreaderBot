@@ -21,8 +21,8 @@ FEEDS = [
     },
 ]
 
-DIGEST_HOUR = 8       # 8h00 UTC
-MAX_ARTICLES = 20
+DIGEST_HOUR = 6       # 6h00 UTC
+MAX_ARTICLES = 50
 SEEN_FILE = "seen_articles.json"
 
 def load_seen():
