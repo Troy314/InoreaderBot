@@ -7,6 +7,7 @@ import json
 import os
 from dotenv import load_dotenv
 load_dotenv()
+print("ENV KEYS:", list(os.environ.keys()))
 
 # --- Config ---
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
