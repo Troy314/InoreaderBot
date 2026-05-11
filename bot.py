@@ -4,14 +4,25 @@ import asyncio
 import discord
 import feedparser
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 load_dotenv()
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
-INOREADER_RSS_URL = os.environ["INOREADER_RSS_URL"]
-FETCH_INTERVAL = 1800
-MAX_ARTICLES = 5
+
+FEEDS = [
+    {
+        "rss_url": os.environ["INOREADER_RSS_URL_1"],
+        "channel_id": int(os.environ["CHANNEL_ID_1"]),
+    },
+    {
+        "rss_url": os.environ["INOREADER_RSS_URL_2"],
+        "channel_id": int(os.environ["CHANNEL_ID_2"]),
+    },
+]
+
+DIGEST_HOUR = 8       # 8h00 UTC
+MAX_ARTICLES = 20
 SEEN_FILE = "seen_articles.json"
 
 def load_seen():
@@ -25,22 +36,19 @@ def save_seen(seen: set):
         json.dump(list(seen), f)
 
 def get_image(entry) -> str | None:
-    # Try media:content tag
     media = entry.get("media_content", [])
     if media:
         return media[0].get("url")
-    # Try enclosures (podcasts/images)
     for enc in entry.get("enclosures", []):
         if enc.get("type", "").startswith("image"):
             return enc.get("href") or enc.get("url")
-    # Try media:thumbnail
     thumb = entry.get("media_thumbnail", [])
     if thumb:
         return thumb[0].get("url")
     return None
 
-def fetch_new_articles(seen: set):
-    feed = feedparser.parse(INOREADER_RSS_URL)
+def fetch_new_articles(rss_url: str, seen: set):
+    feed = feedparser.parse(rss_url)
     new = []
     for entry in feed.entries:
         uid = entry.get("id") or entry.get("link")
@@ -49,53 +57,79 @@ def fetch_new_articles(seen: set):
             seen.add(uid)
     return new[:MAX_ARTICLES]
 
+def seconds_until_next_digest():
+    now = datetime.now(timezone.utc)
+    target = now.replace(hour=DIGEST_HOUR, minute=0, second=0, microsecond=0)
+    if now >= target:
+        # already past 8h today, wait until tomorrow
+        target = target.replace(day=target.day + 1)
+    delta = (target - now).total_seconds()
+    return delta
+
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    client.loop.create_task(news_loop())
+    client.loop.create_task(digest_loop())
 
-async def news_loop():
+async def digest_loop():
     await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
 
-    if channel is None:
-        print("❌ Channel not found!")
-        return
+    # Resolve channels
+    channels = []
+    for feed_cfg in FEEDS:
+        ch = client.get_channel(feed_cfg["channel_id"])
+        if ch is None:
+            print(f"❌ Channel {feed_cfg['channel_id']} not found!")
+        else:
+            print(f"✅ Feed → #{ch.name}")
+            channels.append({"channel": ch, "rss_url": feed_cfg["rss_url"]})
 
-    print(f"✅ Posting to #{channel.name}")
     seen = load_seen()
 
     while not client.is_closed():
-        try:
-            new_articles = fetch_new_articles(seen)
-            if new_articles:
-                save_seen(seen)
-                for entry in new_articles:
-                    title = entry.get("title", "No title")
-                    link = entry.get("link", "")
-                    source = entry.get("source", {}).get("title", "")
-                    image_url = get_image(entry)
+        wait = seconds_until_next_digest()
+        print(f"⏳ Next digest in {wait/3600:.1f}h")
+        await asyncio.sleep(wait)
 
-                    embed = discord.Embed(
-                        title=title,
-                        url=link,
-                        color=discord.Color.blurple()
-                    )
-                    if source:
-                        embed.set_footer(text=source)
-                    if image_url:
-                        embed.set_image(url=image_url)
+        now_str = datetime.now(timezone.utc).strftime("%A %d %B %Y")
 
-                    await channel.send("@everyone", embed=embed)
-                    await asyncio.sleep(1)
-            else:
-                print("No new articles.")
-        except Exception as e:
-            print(f"Error: {e}")
+        for feed_cfg in channels:
+            channel = feed_cfg["channel"]
+            rss_url = feed_cfg["rss_url"]
 
-        await asyncio.sleep(FETCH_INTERVAL)
+            articles = fetch_new_articles(rss_url, seen)
+            save_seen(seen)
+
+            if not articles:
+                await channel.send(f"📭 No new articles for {now_str}.")
+                continue
+
+            # Header message
+            await channel.send(f"@everyone\n📰 **Morning digest — {now_str}** ({len(articles)} articles)")
+            await asyncio.sleep(1)
+
+            for entry in articles:
+                title = entry.get("title", "No title")
+                link = entry.get("link", "")
+                source = entry.get("source", {}).get("title", "")
+                image_url = get_image(entry)
+
+                embed = discord.Embed(
+                    title=title,
+                    url=link,
+                    color=discord.Color.blurple()
+                )
+                if source:
+                    embed.set_footer(text=source)
+                if image_url:
+                    embed.set_image(url=image_url)
+
+                await channel.send(embed=embed)
+                await asyncio.sleep(0.5)
+
+        await asyncio.sleep(60)  # safety pause before recalculating
 
 client.run(DISCORD_TOKEN)
