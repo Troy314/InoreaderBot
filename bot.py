@@ -5,6 +5,8 @@ import feedparser
 import asyncio
 import json
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Config ---
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
