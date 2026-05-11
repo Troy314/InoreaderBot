@@ -1,23 +1,19 @@
-# pip install discord.py feedparser
-
+import os
+import json
+import asyncio
 import discord
 import feedparser
-import asyncio
-import json
-import os
 from dotenv import load_dotenv
-load_dotenv()
-print("ENV KEYS:", list(os.environ.keys()))
 
-# --- Config ---
+load_dotenv()
+
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 INOREADER_RSS_URL = os.environ["INOREADER_RSS_URL"]
-FETCH_INTERVAL = 1800   # seconds between checks (30 min)
-MAX_ARTICLES = 10        # max articles to post per check
+FETCH_INTERVAL = 1800
+MAX_ARTICLES = 5
 SEEN_FILE = "seen_articles.json"
 
-# --- Helpers ---
 def load_seen():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE) as f:
@@ -28,6 +24,21 @@ def save_seen(seen: set):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen), f)
 
+def get_image(entry) -> str | None:
+    # Try media:content tag
+    media = entry.get("media_content", [])
+    if media:
+        return media[0].get("url")
+    # Try enclosures (podcasts/images)
+    for enc in entry.get("enclosures", []):
+        if enc.get("type", "").startswith("image"):
+            return enc.get("href") or enc.get("url")
+    # Try media:thumbnail
+    thumb = entry.get("media_thumbnail", [])
+    if thumb:
+        return thumb[0].get("url")
+    return None
+
 def fetch_new_articles(seen: set):
     feed = feedparser.parse(INOREADER_RSS_URL)
     new = []
@@ -36,20 +47,8 @@ def fetch_new_articles(seen: set):
         if uid not in seen:
             new.append(entry)
             seen.add(uid)
-    return new[:MAX_ARTICLES]   # cap to avoid flooding
+    return new[:MAX_ARTICLES]
 
-def format_entry(entry) -> str:
-    title = entry.get("title", "No title")
-    link = entry.get("link", "")
-    source = entry.get("source", {}).get("title", "") or entry.feed.get("title", "")
-    parts = [f"**{title}**"]
-    if source:
-        parts.append(f"*{source}*")
-    if link:
-        parts.append(link)
-    return "\n".join(parts)
-
-# --- Discord bot ---
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
@@ -61,6 +60,12 @@ async def on_ready():
 async def news_loop():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
+
+    if channel is None:
+        print("❌ Channel not found!")
+        return
+
+    print(f"✅ Posting to #{channel.name}")
     seen = load_seen()
 
     while not client.is_closed():
@@ -69,12 +74,28 @@ async def news_loop():
             if new_articles:
                 save_seen(seen)
                 for entry in new_articles:
-                    await channel.send(format_entry(entry))
-                    await asyncio.sleep(1)  # small delay between posts
+                    title = entry.get("title", "No title")
+                    link = entry.get("link", "")
+                    source = entry.get("source", {}).get("title", "")
+                    image_url = get_image(entry)
+
+                    embed = discord.Embed(
+                        title=title,
+                        url=link,
+                        color=discord.Color.blurple()
+                    )
+                    if source:
+                        embed.set_footer(text=source)
+                    if image_url:
+                        embed.set_image(url=image_url)
+
+                    await channel.send("@everyone", embed=embed)
+                    await asyncio.sleep(1)
             else:
                 print("No new articles.")
         except Exception as e:
             print(f"Error: {e}")
+
         await asyncio.sleep(FETCH_INTERVAL)
 
 client.run(DISCORD_TOKEN)
