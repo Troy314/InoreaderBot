@@ -5,6 +5,7 @@ import discord
 import feedparser
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 load_dotenv()
 
@@ -24,6 +25,13 @@ FEEDS = [
 DIGEST_HOUR = 6       # 6h00 UTC
 MAX_ARTICLES = 50
 SEEN_FILE = "seen_articles.json"
+
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme in ('http', 'https'), result.netloc])
+    except Exception:
+        return False
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
@@ -124,7 +132,7 @@ async def digest_loop():
                 )
                 if source:
                     embed.set_footer(text=source)
-                if image_url:
+                if image_url and is_valid_url(image_url):
                     embed.set_image(url=image_url)
 
                 await channel.send(embed=embed)
