@@ -43,18 +43,6 @@ def save_seen(seen: set):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen), f)
 
-def get_image(entry) -> str | None:
-    media = entry.get("media_content", [])
-    if media:
-        return media[0].get("url")
-    for enc in entry.get("enclosures", []):
-        if enc.get("type", "").startswith("image"):
-            return enc.get("href") or enc.get("url")
-    thumb = entry.get("media_thumbnail", [])
-    if thumb:
-        return thumb[0].get("url")
-    return None
-
 def fetch_new_articles(rss_url: str, seen: set):
     feed = feedparser.parse(rss_url)
     new = []
@@ -69,7 +57,6 @@ def seconds_until_next_digest():
     now = datetime.now(timezone.utc)
     target = now.replace(hour=DIGEST_HOUR, minute=0, second=0, microsecond=0)
     if now >= target:
-        # already past 8h today, wait until tomorrow
         target = target.replace(day=target.day + 1)
     delta = (target - now).total_seconds()
     return delta
@@ -85,7 +72,6 @@ async def on_ready():
 async def digest_loop():
     await client.wait_until_ready()
 
-    # Resolve channels
     channels = []
     for feed_cfg in FEEDS:
         ch = client.get_channel(feed_cfg["channel_id"])
@@ -115,7 +101,6 @@ async def digest_loop():
                 await channel.send(f"📭 No new articles for {now_str}.")
                 continue
 
-            # Header message
             await channel.send(f"@everyone\n📰 **Morning digest — {now_str}** ({len(articles)} articles)")
             await asyncio.sleep(1)
 
@@ -123,7 +108,6 @@ async def digest_loop():
                 title = entry.get("title", "No title")
                 link = entry.get("link", "")
                 source = entry.get("source", {}).get("title", "")
-                image_url = get_image(entry)
 
                 embed = discord.Embed(
                     title=title,
@@ -132,12 +116,10 @@ async def digest_loop():
                 )
                 if source:
                     embed.set_footer(text=source)
-                if image_url and is_valid_url(image_url):
-                    embed.set_image(url=image_url)
 
                 await channel.send(embed=embed)
                 await asyncio.sleep(0.5)
 
-        await asyncio.sleep(60)  # safety pause before recalculating
+        await asyncio.sleep(60)
 
 client.run(DISCORD_TOKEN)
